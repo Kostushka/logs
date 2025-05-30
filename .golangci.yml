@@ -1,0 +1,68 @@
+version: "2"
+
+linters:
+  default: none
+  # This list of linters is not a recommendation (same thing for all this configuration file).
+  # We intentionally use a limited set of linters.
+  # See the comment on top of this file.
+  enable:
+   - funlen
+   - gocognit
+   - gocyclo
+   - maintidx
+   - errcheck
+   - errorlint
+   - nilerr
+   - asciicheck
+   - dogsled
+   - exhaustive
+   - copyloopvar
+   - forcetypeassert
+   - gocheckcompilerdirectives
+   - gochecknoinits # ???
+   - goconst
+   - gocritic
+   - mnd
+   - gosec
+   - govet
+   - ineffassign
+   - ireturn
+   - lll
+   - staticcheck
+     #- gosimple
+   - unused
+   - misspell
+   - nakedret
+   - nestif
+   - nlreturn
+   - predeclared
+   - revive
+   # - typecheck
+   - unconvert
+   - usestdlibvars
+   - wastedassign
+   - wsl 
+  settings:
+    govet:
+      settings:
+        printf:
+          funcs:
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      rewrite-rules:
+        - pattern: 'interface{}'
+          replacement: 'any'
+    goimports:
+      local-prefixes:
+        - github.com/golangci/golangci-lint/v2
+  exclusions:
+    paths:
+      - test/testdata_etc # test files
+      - internal/go # extracted from Go code
+      - internal/x # extracted from x/tools code
+      - pkg/goformatters/gci/internal # extracted from gci code
+      - pkg/goanalysis/runner_checker.go # extracted from x/tools code
