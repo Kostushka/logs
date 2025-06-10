@@ -1,4 +1,4 @@
-module logs
+module github.com/Kostushka/logs
 
 go 1.24.0
 
