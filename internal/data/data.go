@@ -2,19 +2,18 @@
 package data
 
 import (
-	"os"
-	"io"
-	"io/fs"
-	"errors"
-	"strings"
-	"fmt"
-	"log"
-	"strconv"
-	"regexp"
 	"bufio"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 
-	"github.com/Kostushka/logs/internal/types"
 	"github.com/Kostushka/logs/internal/inputdata"
+	"github.com/Kostushka/logs/internal/types"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -34,43 +33,90 @@ var reP = regexp.MustCompile(pReg)
 // временно захардкордим дискретизацию
 var discretNum = 60
 
-// получение кол-ва запросов и ошибок
-func GiveCountReqErr(data *inputdata.InputData, path string) (*types.CountReqErr, error) {
-	// открываем файл с логами
-	fd, err := os.Open(path) //nolint
+func CalcDiscretNum(data *inputdata.InputData) {
+	switch data.Discret {
+	case "h":
+	// переводим период в часы
+	// кол-во часов == кол-во элементов в срезах в types.CountReqErr
+	case "m":
+	// переводим период в минуты
+	// кол-во минут == кол-во элементов в срезах в types.CountReqErr
+	// Example:
+	// период: 00h или 14-17h или 250812 надо перевести в минуты
+	//	00h[60 elem] 14-17h[240 elem] 250812[1440 elem]
+	case "s":
+	// переводим период в секунды
+	// кол-во секунд == кол-во элементов в срезах в types.CountReqErr
+	default:
+		// переводим период в секунды
+		// считаем высоту окна
+		// проверяем, что гистограмма может быть отрисована на данной ширине и высоте окна терминала
+		// кол-во секунд / высота окна == кол-во элементов в срезах в types.CountReqErr
+	}
+}
 
-	if err == nil {
-		// закрываем дескриптор открытого файла
-		defer closeFile(fd)
+// получение данных о кол-ве запросов, ошибок, % ошибок и др.
+func GiveCountReqErr(data *inputdata.InputData, pathDir string) (*types.CountReqErr, error) {
 
-		// считаем кол-во запросов и ошибок
-		count := calcCountReqErr(fd, data)
+	// получаем данные файлов с логами для последующего их чтения
+	fdList, err := openLogFiles(pathDir)
 
-		return count, nil
+	if err != nil {
+		return nil, err
 	}
 
-	// проверяем, не имеет ли файл расширение .zst
-	if errors.Is(err, fs.ErrNotExist) {
-		// открываем файл с логами
-		fd, err = os.Open(path + ".zst") //nolint
-		// файл с логами должен быть
-		if err != nil {
-			return nil, err
-		}
-		// закрываем дескриптор открытого файла
+	// закрываем дескрипторы открытых файлов
+	for _, fd := range fdList.fd {
 		defer closeFile(fd)
-		// декодируем формат zstd
-		d, err := zstd.NewReader(fd)
-		if err != nil {
-			return nil, err
-		}
-		// считаем кол-во запросов и ошибок
-		count := calcCountReqErr(d, data)
-
-		return count, nil
 	}
 
-	return nil, err
+	// получаем данные о кол-ве запросов, ошибок, % ошибок и др.
+	dataLog, err := calcCountReqErr(fdList, data)
+	if err != nil {
+		return nil, err
+	}
+
+	return dataLog, nil
+}
+
+type logFileData struct {
+	fd   []*os.File
+	name []string
+}
+
+// получаем данные файлов с логами для последующего их чтения
+func openLogFiles(pathDir string) (*logFileData, error) {
+	// получаем список всех файлов по заданному пути к корневому каталогу с логами
+	files, err := os.ReadDir(pathDir)
+	if err != nil {
+		return nil, err
+	}
+
+	// список файловых дескрипторов и имен файлов с логами для последующего их чтения
+	fdList := logFileData{}
+
+	for _, file := range files {
+		// здесь должна быть логика выбора из всех файлов нужных, согласно заданному периоду
+		// пока костыль
+		if strings.HasPrefix(file.Name(), "vh442-20250424") {
+			// открываем файл с логами
+			fd, err := os.Open(filepath.Join(pathDir, file.Name())) //nolint:gosec
+
+			// файл с логами должен быть
+			if err != nil {
+				return nil, err
+			}
+
+			// добавляем файловый дескриптор и имя файла
+			fdList.fd = append(fdList.fd, fd)
+			fdList.name = append(fdList.name, file.Name())
+		}
+	}
+	// хотя бы один файл с логами должен быть
+	if len(fdList.fd) == 0 {
+		return nil, fmt.Errorf("нет файлов логов, соответствующих заданному временному периоду")
+	}
+	return &fdList, nil
 }
 
 func splitStr(c *types.CountReqErr, data *inputdata.InputData, str string) bool {
@@ -85,6 +131,7 @@ func splitStr(c *types.CountReqErr, data *inputdata.InputData, str string) bool 
 
 	// получаем массив с разделением на час и минуты
 	hm := strings.Split(time[1], ":")
+
 	// берем данные за конкретный час
 	if hm[0] == "00" {
 		// преобразуем строку с минутой в число
@@ -115,10 +162,7 @@ func closeFile(fd io.Closer) {
 }
 
 // подсчет кол-ва запросов и ошибок
-func calcCountReqErr(fd io.Reader, data *inputdata.InputData) *types.CountReqErr {
-	// структура для чтения файла лога
-	s := bufio.NewScanner(fd)
-
+func calcCountReqErr(fdList *logFileData, data *inputdata.InputData) (*types.CountReqErr, error) {
 	// струтура с кол-вом запросов и ошибок
 	c := types.CountReqErr{
 		Req:  make([]int, discretNum),
@@ -126,19 +170,38 @@ func calcCountReqErr(fd io.Reader, data *inputdata.InputData) *types.CountReqErr
 		Rate: make([]float64, discretNum),
 	}
 
-	// разделяет файл лога на строки
-	for s.Scan() {
-		// записать строку в переменную
-		str := s.Text()
-		// подсчет кол-ва запросов и ошибок
-		if !splitStr(&c, data, str) {
-			break
-		}
-	}
+	// считаем данные по каждому файлу лога
+	for i := 0; i < len(fdList.fd); i++ {
+		var fd io.Reader = fdList.fd[i]
 
-	// обработка ошибок, отличных от EOF
-	if err := s.Err(); err != nil {
-		log.Fatal(err)
+		// проверяем, не имеет ли файл расширение .zst
+		if strings.HasSuffix(fdList.name[i], ".zst") {
+			// декодируем формат zstd
+			d, err := zstd.NewReader(fdList.fd[i])
+			if err != nil {
+				return nil, err
+			}
+			fd = d
+		}
+
+		// структура для чтения файла лога
+		s := bufio.NewScanner(fd)
+
+		// разделяет файл лога на строки
+		for s.Scan() {
+			// записать строку в переменную
+			str := s.Text()
+
+			// подсчет кол-ва запросов и ошибок
+			if !splitStr(&c, data, str) {
+				break
+			}
+		}
+
+		// обработка ошибок, отличных от EOF
+		if err := s.Err(); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	// вычисляем процент ошибок за каждую временную единицу дискретизации и максимальный процент ошибок за выбранный период
@@ -149,13 +212,14 @@ func calcCountReqErr(fd io.Reader, data *inputdata.InputData) *types.CountReqErr
 		}
 	}
 
-	return &c
+	return &c, nil
 }
 
 // подсчет кол-ва искомых ошибок
 func calcCountErr(data *inputdata.InputData, err []int, str string, i int) {
 	// получаем срез выражений в () в совпадающих с регуляркой строках
 	codeStat := reErr.FindStringSubmatch(str)
+
 	// срез не должен быть пустым
 	if len(codeStat) != 0 {
 		// проверяем совпадения кода ответа с искомой ошибкой
@@ -165,5 +229,3 @@ func calcCountErr(data *inputdata.InputData, err []int, str string, i int) {
 		}
 	}
 }
-
-

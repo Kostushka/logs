@@ -3,8 +3,10 @@ package histogram
 
 import (
 	"fmt"
+	"time"
+
 	"golang.org/x/term"
-	
+
 	"github.com/Kostushka/logs/internal/types"
 )
 
@@ -12,7 +14,7 @@ type histogram struct {
 	rate100     float64
 	screenW     int
 	screenH     int
-	discretNum  int
+	discretNum  string
 	discretName string
 }
 
@@ -26,12 +28,10 @@ func NewHistogram(dName string) (*histogram, error) {
 
 	return &histogram{
 		rate100: 100,
-		// временно захардкордим ширину окна
 		screenW: width,
-		// временно захардкордим высоту окна
 		screenH: height,
 		// временно захардкордим дискретизацию
-		discretNum: 60,
+		discretNum: "m",
 		// дискретизация
 		discretName: dName,
 	}, nil
@@ -39,9 +39,9 @@ func NewHistogram(dName string) (*histogram, error) {
 
 // данные для отрисовки гистограммы
 type dataHistogram struct {
-	scale  bool
-	width  int
-	height int
+	scale   bool
+	width   int
+	height  int
 	maxRate float64
 }
 
@@ -52,25 +52,32 @@ func (h *histogram) CalcHistogram(c *types.CountReqErr) (*dataHistogram, error) 
 	// длина отрезка между двумя засечками
 	var width float64
 
-	// шаг дискретизации с учетом высоты окна
-	height := h.discretNum / (h.screenH - 5)
+	// шаг дискретизации с учетом высоты окна (по умолчанию)
+	// 10 строк из высоты окна пойдет на служебную инфо
+	height := h.screenH - 10
+	// здесь должна быть логика, где мы учитываем указанный период и переводим его в секунды (пока захардкордим час в секундах)
+	period := 3600
+	// рассчитываем, сколько секунд приходится на каждую строку с учетом высоты окна
+	sec := period / height
+	// определяем шаг дискретизации (в одной строке отображаются данные за discretNum минут)
+	discretNum := sec / 60
 
 	// получаем максимальный процент ошибок с учетом определенного шага дискретизации
-	maxRate := calcMaxRate(c, height)
+	maxRate := calcMaxRate(c, discretNum)
 
 	// максимальный процент ошибок не должен быть меньше 1
 	var maxR float64
 	if int(maxRate) < 1 {
 		scale = true
-		maxR = maxRate*h.rate100
+		maxR = maxRate * h.rate100
 	} else {
 		maxR = maxRate
 	}
 	// вычисляем ширину между засечками
 	width = float64(h.screenW) / maxR
-	
+
 	// учитываем доп. отображаемые данные
-	for h.screenW - int(maxR)*int(width) < 15 {
+	for h.screenW-int(maxR)*int(width) < 15 {
 		width -= 1
 	}
 
@@ -79,9 +86,9 @@ func (h *histogram) CalcHistogram(c *types.CountReqErr) (*dataHistogram, error) 
 	}
 
 	return &dataHistogram{
-		scale:  scale,
-		width:  int(width),
-		height: height,
+		scale:   scale,
+		width:   int(width),
+		height:  discretNum,
 		maxRate: maxRate,
 	}, nil
 }
@@ -90,9 +97,9 @@ func (h *histogram) CalcHistogram(c *types.CountReqErr) (*dataHistogram, error) 
 func calcMaxRate(c *types.CountReqErr, height int) float64 {
 	var step int
 	var max, sum float64
-	
+
 	flag := false
-	
+
 	for i, v := range c.Rate {
 		if i == c.Num {
 			break
@@ -113,7 +120,7 @@ func calcMaxRate(c *types.CountReqErr, height int) float64 {
 		step = 0
 		flag = true
 		// учитываем также последние данные, которые попадают в шаг дискретизации
-		if len(c.Rate)-1 - i <= height {
+		if len(c.Rate)-1-i <= height {
 			for j := i; j < len(c.Rate)-1; j++ {
 				sum += c.Rate[j]
 			}
@@ -127,8 +134,10 @@ func calcMaxRate(c *types.CountReqErr, height int) float64 {
 	return max
 }
 
-const Yellow = "\033[33m"
-const Reset = "\033[0m"
+const (
+	Yellow = "\033[33m"
+	Reset  = "\033[0m"
+)
 
 // рисуем ось Y
 func (h *histogram) printY(c *types.CountReqErr, data *dataHistogram) {
@@ -153,7 +162,7 @@ func (h *histogram) printY(c *types.CountReqErr, data *dataHistogram) {
 		}
 
 		step = 0
-		
+
 		// учитываем неотображенные на графике проценты ошибок
 		sum += v
 
@@ -162,13 +171,13 @@ func (h *histogram) printY(c *types.CountReqErr, data *dataHistogram) {
 
 		// рисуем график за период дискретизации
 		displayY(data, sum, h.rate100)
-		
+
 		sum = 0
 		flag = true
 
 		// отображаем также последние данные, которые попадают в шаг дискретизации
-		if len(c.Rate)-1 - i <= data.height {
-			j := i+1
+		if len(c.Rate)-1-i <= data.height {
+			j := i + 1
 			for ; j < len(c.Rate); j++ {
 				sum += c.Rate[j]
 			}
@@ -177,7 +186,7 @@ func (h *histogram) printY(c *types.CountReqErr, data *dataHistogram) {
 
 			// рисуем график за период дискретизации
 			displayY(data, sum, h.rate100)
-			
+
 			sum = 0
 		}
 	}
@@ -185,14 +194,14 @@ func (h *histogram) printY(c *types.CountReqErr, data *dataHistogram) {
 
 func displayY(data *dataHistogram, sum, rate100 float64) {
 	var p int
-	
+
 	// процент ошибок не должен быть меньше 1
 	if data.scale {
 		p = int(sum * rate100)
 	} else {
 		p = int(sum)
 	}
-	
+
 	printP := p
 
 	// отображаем процент ошибок за указанный период дискретизации
@@ -254,7 +263,7 @@ func printX(data *dataHistogram, maxRate int) {
 				// отрезок между засечками
 				for w > 0 {
 					fmt.Printf(" ")
-	
+
 					w--
 				}
 			}
@@ -266,7 +275,7 @@ func printX(data *dataHistogram, maxRate int) {
 
 	flag = false
 
-	for i := 1; i <= maxR; i++ {		
+	for i := 1; i <= maxR; i++ {
 		if i > digitToNum {
 			w := data.width
 			if flag {
@@ -307,8 +316,8 @@ func printX(data *dataHistogram, maxRate int) {
 }
 
 // рисуем гистограмму
-func (h *histogram) PrintHistogram(c *types.CountReqErr, data *dataHistogram, period string) {
-	fmt.Printf("t (период): %s\n", period)
+func (h *histogram) PrintHistogram(c *types.CountReqErr, data *dataHistogram, before, after time.Time) {
+	fmt.Printf("t (период): [%v] [%v]\n", before, after)
 	// рисуем ось Y
 	h.printY(c, data)
 
